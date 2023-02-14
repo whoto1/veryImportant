@@ -4,7 +4,7 @@
 #define M_PI 3.14159265358979323846
 
 #define N 10000000
-//// d
+//// iiid
 //float FuncArrayFloat(float* my_array, int len)
 //{
 //	float sum = 0;
