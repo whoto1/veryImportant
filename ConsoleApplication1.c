@@ -1,4 +1,4 @@
-﻿//#define _CRT_SECURE_NO_WARNINGS
+//#define _CRT_SECURE_NO_WARNINGS
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
@@ -19,7 +19,6 @@ int main(int argc, char** argv) {
 	/*int m = 128; int iter_max = 1000000;
 	double tol = 1e-6;*/
 	double** arr = (double**)malloc(N * sizeof(double*)); // creatin array
-	#pragma acc loop
 	for(int i = 0; i < N; i++)//initializing array
 	{
 		arr[i] = (double*)malloc(2* N * sizeof(double));
@@ -46,14 +45,12 @@ int main(int argc, char** argv) {
 		arr[j][m-1] = arr[j][2*m-1]= rght * j + arr[0][m-1]; 	//right
 	}
 	int iter = 0;
-
+	int flag = 1;
 	double err = tol + 1;
 	#pragma acc data copy(arr[:m][:(2*m)]) 
-
 	{
 		int right=0, left=m;
-	while(err > tol && iter < iter_max){
-		err = 0;
+	while(flag && iter < iter_max){
 		if (!(iter % 2)) //swapping arrays
 		{//left to right
 			left = 0;
@@ -64,27 +61,32 @@ int main(int argc, char** argv) {
 			left = m;
 			right = 0;
 		}
-		#pragma acc parallel loop reduction(max:err) 
+		#pragma acc parallel loop 
 		for(int j = 1; j < m - 1; j++)	{
-			#pragma acc loop reduction(max:err)
+			#pragma acc loop
 			for(int i = 1; i < m - 1; i++){
 				arr[i][j+left] = 0.25 * (arr[i+1][j+right] + arr[i-1][j+right]
 							+ arr[i][j-1 +right] + arr[i][j+1+right]);
-				err = fmax(err, fabs(arr[i][j+m] - arr[i][j]));
 			}
 		}
-
-		if (iter % 100 == 0) {
-			printf("%d, %0.6lf\n", iter, err);
+		if(iter%100 == 0)
+		{
+			err = 0;
+			#pragma acc parallel loop reduction(max:err)
+			for(int i = 1; i<m-1;i++)
+				#pragma acc loop reduction(max:err)
+				for(int j = 1;j<m-1;j++)
+					err = fmax(err, fabs(arr[i][j+m]-arr[i][j]));	
+			flag = err > tol;	
 		}
 		iter++;
 	}
+
 	}
 	clock_gettime(CLOCK_REALTIME, &stop);
 	delta = (stop.tv_sec - start.tv_sec) + (double)(stop.tv_nsec - start.tv_nsec)/(double)BILLION;
 	printf("time %lf\n", delta);
 	printf("Final result: %d, %0.6lf\n", iter, err);
-	#pragma acc parallel loop
 	for (int i = 0; i < N; i++) {
 		free(arr[i]);
 	}
@@ -92,3 +94,4 @@ int main(int argc, char** argv) {
 	//printf("%d%d%lf", m, iter_max, tol);
 	return 0;
 }
+
