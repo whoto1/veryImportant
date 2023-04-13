@@ -55,6 +55,7 @@ int main(int argc, char** argv) {
 		//printf("%lf %d\n ", arr[2*m*j],2*m*j);
 		arr[IDX2F(j, m, m)] = arr[IDX2F(j, 2*m, m)] = rght * (j - 1) + arr[IDX2F(1, m, m)]; 	//right
 	}
+	//print array
 	/*for(int i =1;i<=m;i++)
 	{
 		for(int j =1;j<=2*m;j++)
@@ -74,7 +75,7 @@ int main(int argc, char** argv) {
 		printf("cublas handle failed\n");
 		return EXIT_FAILURE;
 	}
-
+	//creating new arrays to pass to gpu
 	double* newArr;
 	double* oldArr;
 	cudaStat = cudaMalloc((void**)&newArr, m * m * sizeof(*arr));
@@ -98,6 +99,10 @@ int main(int argc, char** argv) {
 	int iter = 0;
 
 	double err = tol + 1;
+	////////////////////////////////////////////////////////////////////////////////
+	// Вычисление уравнения. Сначала выполняется обмен массивов, а потом вычисления
+	// Затем каждые 100 итераций вычисляется ошибка
+	////////////////////////////////////////////////////////////////////////////////
 	#pragma acc data copy(arr[:(2*m*m)]) copyin(alpha) copyin(tol)
 	{
 		int right = 0, left = m;
@@ -162,7 +167,7 @@ int main(int argc, char** argv) {
 			iter++;
 		}
 	}
-
+	//printing array
 	/*for(int i = 1;i=<15;i++)
 	{
 		for(int j =1;j<=15;j++)
