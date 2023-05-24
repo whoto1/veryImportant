@@ -1,0 +1,187 @@
+//#define _CRT_SECURE_NO_WARNINGS
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+#include <time.h>
+#include <cuda_runtime.h>
+#include <cub/cub.cuh>
+
+#define IDX2F(i,j,ld) ((((j)-1)*(ld))+((i)-1))
+#define BILLION 1000000000
+#define MAX(X,Y) (((X) > (Y)) ? (X) : (Y))
+#define N 1024
+
+__global__ void CoefFill(double* arr, double top, double bottom, double right, double left,int m)
+{
+	int j = blockDim.x * blockIdx.x + threadIdx.x;
+	if ((j > 0) && (j < m))
+	{
+		//printf("%d",j);
+		arr[IDX2F(1, j, m)] = arr[IDX2F(1, j + m, m)] = (j - 1) * top + arr[IDX2F(1, 1, m)];   	//top
+		arr[IDX2F(m, j, m)] = arr[IDX2F(m, j + m, m)] = (j - 1) * bottom + arr[IDX2F(m, 1, m)]; 	//bottom
+		arr[IDX2F(j, 1, m)] = arr[IDX2F(j, m + 1, m)] = (j - 1) * left + arr[IDX2F(1, 1, m)]; 		//left
+		arr[IDX2F(j, m, m)] = arr[IDX2F(j, 2 * m, m)] = right * (j - 1) + arr[IDX2F(1, m, m)]; 	//right
+	}
+	
+}
+__global__ void countInt(double* arr, int left, int right,int m)
+{
+	int i = blockDim.x * blockIdx.x + threadIdx.x;
+	int j = blockDim.y * blockIdx.y + threadIdx.y;
+	if ((i > 1) && (i < m) && (j > 1) && (j < m)) {
+		arr[IDX2F(i, j + left, m)] = 0.25 * (arr[IDX2F(i + 1, j + right, m)] + arr[IDX2F(i - 1, j + right, m)]
+			+ arr[IDX2F(i, j - 1 + right, m)] + arr[IDX2F(i, j + 1 + right, m)]);
+	}
+}
+__global__ void subArr(const double* arr1, double* arr2,int m)
+{
+	int i = blockDim.x * blockIdx.x + threadIdx.x;
+	int j = blockDim.y * blockIdx.y + threadIdx.y;
+	if ((i > 1) && (i < m) && (j > 1) && (j < m))
+	{
+		arr2[IDX2F(i,j,m)] = fabs(arr1[IDX2F(i, j, m)] - arr1[IDX2F(i, j+m, m)]);
+	}
+}
+
+int main(int argc, char** argv) {
+	struct timespec start, stop;
+	clock_gettime(CLOCK_REALTIME, &start);
+	double delta;
+	int m, iter_max;
+	double tol;
+	sscanf(argv[1], "%d", &m);
+	sscanf(argv[2], "%d", &iter_max);
+	sscanf(argv[3], "%lf", &tol);
+
+	/*int m = 128; int iter_max = 1000000;
+	double tol = 1e-6;*/
+
+	//m = 5;
+	//iter_max = 1;
+	//tol = 1e-6;
+	double* arr = (double*)malloc(2 * m * m * sizeof(double)); // creatin array
+	for (int i = 1; i <= m; i++)//initializing array
+	{
+		for (int j = 1; j <= m; j++)
+			arr[IDX2F(i, j, m)] = 0;
+	}
+	//initializing boundaries
+	arr[IDX2F(1, 1, m)] = arr[IDX2F(1, m + 1, m)] = 10;//up left
+	arr[IDX2F(1, m, m)] = arr[IDX2F(1, 2 * m, m)] = 20; //up right
+	arr[IDX2F(m, 1, m)] = arr[IDX2F(m, m + 1, m)] = 20;	//down left
+	arr[(IDX2F(m, m, m))] = arr[IDX2F(m, 2 * m, m)] = 30; //down right
+
+
+
+	//coefficients for the interpolation
+	double top = (arr[IDX2F(1, m, m)] - arr[IDX2F(1, 1, m)]) / (m - 1);
+	double btm = (arr[IDX2F(m, m, m)] - arr[IDX2F(m, 1, m)]) / (m - 1);
+	double lft = (arr[IDX2F(m, 1, m)] - arr[IDX2F(1, 1, m)]) / (m - 1);
+	double rght = (arr[IDX2F(m, m, m)] - arr[IDX2F(1, m, m)]) / (m - 1);
+
+	///cudaError_t cudaErr = cudaSuccess;
+	size_t size = 2 * m * m * sizeof(double);
+	double* arr1 = NULL;
+	double* arr2 = NULL;
+	cudaMalloc((void**)&arr1, size);
+	cudaMalloc((void**)&arr2,size / 2);
+        cudaMemcpy(arr1, arr, 2 * m * m * sizeof(double), cudaMemcpyHostToDevice);
+
+	//creating new arrays to pass to gpu
+	
+	 CoefFill <<<1, 1024 >>> (arr1, top, btm, rght,lft, m);
+	 cudaMemcpy(arr, arr1, 2 * m * m * sizeof(double), cudaMemcpyDeviceToHost);
+	 
+	 printf("\n");
+	 if (m == 13) {
+		 for (int i = 1; i <= m; i++) {
+			 for (int j = 1; j <= 2 * m; j++) {
+				 printf("%06.3f ", arr[IDX2F(i, j, m)]);
+			 }
+			 printf("\n");
+		 }
+	 }
+
+	 double* h_buff = (double*)malloc(sizeof(double));
+	 double* d_buff = NULL;
+	 cudaMalloc((void**)&d_buff, sizeof(double));
+	 dim3 grid(32, 32);
+	 dim3 block(32, 32);
+	
+	int iter = 0;
+	void* d_temp_storage = NULL;
+	size_t temp_storage_bytes = 0;
+	cub::DeviceReduce::Max(d_temp_storage, temp_storage_bytes, arr2, d_buff, m * m);
+	double err = tol + 1;
+	////////////////////////////////////////////////////////////////////////////////
+	// Вычисление уравнения. Сначала выполняется обмен массивов, а потом вычисления
+	// Затем каждые 100 итераций вычисляется ошибка
+	////////////////////////////////////////////////////////////////////////////////
+	
+	int right = 0, left = m;
+	int flag = 1;
+	cudaMalloc(&d_temp_storage, temp_storage_bytes);
+	{
+	while (flag && iter < iter_max) {
+		if (!(iter % 2)) //swapping arrays
+		{//left to right
+			left = 0;
+			right = m;
+		}
+		else //right to left
+		{
+			left = m;
+			right = 0;
+		}
+
+		countInt<<<grid, block >>> (arr1, left, right, m);
+		if (iter % 100 == 0)
+		{
+			//err=0;
+			subArr <<<grid, block >>> (arr1, arr2, m);
+			cub::DeviceReduce::Max(d_temp_storage, temp_storage_bytes, arr2, d_buff, m * m);
+			cudaMemcpy(h_buff, d_buff, sizeof(double), cudaMemcpyDeviceToHost);
+			err = *h_buff;
+			flag = err > tol;
+			//printf("%lf ",err);
+		}
+		//printf("%d ",flag);
+		iter++;
+	}
+	}
+	
+	subArr <<<grid, block >>> (arr1, arr2, m);
+	//printing array
+	/*for(int i = 1;i=<15;i++)
+	{
+		for(int j =1;j<=15;j++)
+			printf("%lf ",arr[IDX2F(i, j, m)]);
+
+		printf("\n");
+
+	}*/
+	clock_gettime(CLOCK_REALTIME, &stop);
+	delta = (stop.tv_sec - start.tv_sec) + (double)(stop.tv_nsec - start.tv_nsec) / (double)BILLION;
+	printf("time %lf\n", delta);
+	printf("Final result: %d, %0.6lf\n", iter, err);
+	//cudaFree(oldArr);
+	//cudaFree(newArr);
+	cudaMemcpy(arr, arr1, 2 * m * m * sizeof(double), cudaMemcpyDeviceToHost);
+	if (m == 13) {
+		for (int i = 1; i <= m; i++) {
+			for (int j = 1; j <= 2*m; j++) {
+				printf("%06.3f ", arr[IDX2F(i,j,m)]);
+			}
+			 printf("\n");
+		        }
+	}
+	  free(arr);
+	  free(h_buff);
+	  cudaFree(d_buff);
+	  cudaFree(arr1);
+	  cudaFree(arr2);
+	  cudaFree(d_temp_storage);
+	  return EXIT_SUCCESS;
+
+}
